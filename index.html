@@ -88,7 +88,7 @@
    carga desde su móvil (botón "Poner nuestras caras") y se
    guardan solo en ese móvil. Nunca se suben a internet.
    ========================================================= */
-const VERSION = '2.6';      // cámbiala en cada actualización para ver que ha llegado
+const VERSION = '2.7';      // cámbiala en cada actualización para ver que ha llegado
 const PERSONAJES = [
   { nombre: 'Papá', color: '#7d1f2c', pelo: '#3a2a1e', ancho: 34, alto: 70, imagen: null, cuello: '#a5ff3a', cara: null },
   { nombre: 'Hijo', color: '#c9dc7c', cuello: '#1f2a44', pelo: '#5a3a1e', ancho: 30, alto: 58, imagen: null, cara: null }
@@ -133,11 +133,21 @@ const SIZES = [
 ];
 const LEVELS = [
   [ {s:0, x:90, d: 1} ],
-  [ {s:0, x:90, d: 1}, {s:1, x:710, d:-1} ],
-  [ {s:0, x:90, d: 1}, {s:0, x:710, d:-1} ],
-  [ {s:0, x:90, d: 1}, {s:1, x:230, d:-1}, {s:0, x:710, d:-1} ],
-  [ {s:0, x:90, d: 1}, {s:0, x:600, d: 1}, {s:0, x:230, d:-1} ]
+  [ {s:0, x:90, d: 1} ],
+  [ {s:0, x:90, d: 1} ],
+  [ {s:0, x:90, d: 1}, {s:1, x:230, d:-1} ],
+  [ {s:0, x:90, d: 1}, {s:0, x:700, d:-1} ]
 ];
+// vitrinas de cristal que cuelgan del techo con bolas encerradas (como en el original):
+// las bolas no salen hasta que rompes el cristal con el arpón
+const VITRINAS = [
+  [],
+  [ {x:600, bolas:[2]} ],
+  [ {x:450, bolas:[2]}, {x:650, bolas:[2]} ],
+  [ {x:520, bolas:[3, 3]}, {x:700, bolas:[2]} ],
+  [ {x:380, bolas:[2]}, {x:520, bolas:[2]} ]
+];
+const VITRINA_ANCHO = 64, VITRINA_ALTO = 100;
 const BALL_COLORS = ['#e53935', '#1e88e5', '#43a047', '#8e24aa', '#fb8c00'];
 
 /* ---------- Pantalla ---------- */
@@ -151,7 +161,7 @@ function resize() {
   const availW = window.innerWidth, availH = window.innerHeight;
   // el escenario se estira a lo ancho para llenar la pantalla (entre 4:3 y 21:9)
   const newW = Math.round(Math.max(600, Math.min(1050, H * availW / availH)));
-  if (newW !== W) { const k = newW / W; W = newW; players.forEach(p => { p.x *= k; p.shots.forEach(sh => sh.x *= k); }); if (item) item.x *= k; balls.forEach(b => b.x *= k); drawBackground(); }
+  if (newW !== W) { const k = newW / W; W = newW; players.forEach(p => { p.x *= k; p.shots.forEach(sh => sh.x *= k); }); if (item) item.x *= k; balls.forEach(b => b.x *= k); jaulas.forEach(j => j.x *= k); drawBackground(); }
   viewScale = Math.min(availW / W, availH / H);
   cv.style.width = Math.floor(W * viewScale) + 'px';
   cv.style.height = Math.floor(H * viewScale) + 'px';
@@ -614,6 +624,7 @@ const sfx = {
   pop: () => { noise(.12, .18); tone(500, 150, .12, 'triangle', .1); },
   hurt: () => tone(400, 60, .5, 'sawtooth', .1),
   // "uah, uah, uah, uaaah" de dibujos animados al caer
+  cristal: () => { noise(.3, .22); [2093, 2637, 3136, 2349].forEach((f, i) => setTimeout(() => tone(f, f * .98, .14, 'triangle', .05), i * 45)); },
   muerte: () => [392, 370, 349, 311].forEach((f, i) => setTimeout(() => tone(f, f * (i === 3 ? .8 : .96), i === 3 ? .7 : .22, 'sawtooth', .08), i * 240)),
   laser: () => tone(1400, 700, .06, 'sawtooth', .025),
   appear: () => [880, 1175, 1568].forEach((f, i) => setTimeout(() => tone(f, f, .1, 'triangle', .06), i * 70)),
@@ -775,7 +786,7 @@ cv.addEventListener('contextmenu', e => e.preventDefault());
 let state = 'menu', level = 0, score = 0, timer = 0, animT = 0;
 // en el modo súper fácil se empieza con 5 vidas; en los demás, con 3
 function vidasIniciales() { return modo === 'superfacil' ? 5 : 3; }
-let players = [], balls = [], particles = [];
+let players = [], balls = [], particles = [], jaulas = [];
 
 function makePlayer(i) {
   const c = PERSONAJES[i];
@@ -790,6 +801,11 @@ function loadLevel(n) {
   level = n; balls = []; particles = [];
   ponerFondo(n);
   LEVELS[n].forEach(b => balls.push(makeBall(b.s, b.x * W / 800, 120, b.d * VX, 0)));
+  jaulas = (VITRINAS[n] || []).map(v => ({ x: v.x * W / 800, w: VITRINA_ANCHO, bottom: VITRINA_ALTO }));
+  (VITRINAS[n] || []).forEach((v, i) => v.bolas.forEach((s, k) => {
+    const jl = jaulas[i], b = makeBall(s, jl.x + (k - (v.bolas.length - 1) / 2) * 14, jl.bottom - SIZES[s].r - 20, (k % 2 ? -1 : 1) * VX * .5, 0);
+    b.jaula = jl; balls.push(b);
+  }));
   players.forEach(p => {
     p.shots = []; p.power = null; p.inv = 1.5; p.bocadillo = null;
     if (!p.alive) p.deadT = null;   // en el nivel nuevo ya no se ve al que se cayó
@@ -888,6 +904,13 @@ function update(dt) {
       else if (sh.stuck > 0) { sh.stuck -= dt; if (sh.stuck <= 0) { sh.dead = true; p.cd = Math.max(p.cd, .06); } }
       else { sh.tip -= HARPOON_SPEED * dt; if (sh.tip <= 0) { sh.tip = 0; sh.stuck = HARPOON_STICK; } }
       if (sh.dead) return;
+      // si el arpón llega a una vitrina, rompe el cristal
+      for (const jl of jaulas) {
+        if (Math.abs(sh.x - jl.x) <= jl.w / 2 + 2 && sh.tip <= jl.bottom) {
+          sh.dead = true; if (sh.kind === 'h') p.cd = Math.max(p.cd, .06);
+          romperVitrina(jl); return;
+        }
+      }
       const bottom = sh.kind === 'l' ? sh.tip + 26 : FLOOR;
       for (let j = 0; j < balls.length; j++) {
         const b = balls[j];
@@ -927,6 +950,25 @@ function update(dt) {
   // bolas: siempre rebotan a la misma altura según su tamaño
   balls.forEach(b => {
     b.vy += G * dt; b.x += b.vx * dt; b.y += b.vy * dt;
+    const jl = b.jaula;
+    if (jl) {
+      // encerrada: rebota dentro de la vitrina
+      const suelo = jl.bottom - 4, izq = jl.x - jl.w / 2 + 4, der = jl.x + jl.w / 2 - 4;
+      if (b.y + b.r >= suelo) { b.y = suelo - b.r; b.vy = -Math.sqrt(2 * G * Math.max(20, Math.min(SIZES[b.s].h, suelo - 2 * b.r - 8))); }
+      if (b.y - b.r <= 2) { b.y = b.r + 2; b.vy = Math.abs(b.vy); }
+      if (b.x - b.r <= izq) { b.x = izq + b.r; b.vx = Math.abs(b.vx); }
+      if (b.x + b.r >= der) { b.x = der - b.r; b.vx = -Math.abs(b.vx); }
+      return;
+    }
+    // las bolas libres rebotan contra el cristal de las vitrinas
+    jaulas.forEach(v => {
+      const cx = Math.max(v.x - v.w / 2, Math.min(v.x + v.w / 2, b.x)), cy = Math.min(v.bottom, b.y);
+      const dx = b.x - cx, dy = b.y - cy;
+      if (dx * dx + dy * dy >= b.r * b.r) return;
+      if (b.y > v.bottom && Math.abs(dx) < b.r * .7) { b.y = v.bottom + Math.sqrt(Math.max(0, b.r * b.r - dx * dx)); b.vy = Math.abs(b.vy); }
+      else if (b.x < v.x) { b.x = v.x - v.w / 2 - b.r; b.vx = -Math.abs(b.vx); }
+      else { b.x = v.x + v.w / 2 + b.r; b.vx = Math.abs(b.vx); }
+    });
     if (b.y + b.r >= FLOOR) { b.y = FLOOR - b.r; b.vy = -Math.sqrt(2 * G * SIZES[b.s].h); }
     if (b.y - b.r <= 0) { b.y = b.r; b.vy = Math.abs(b.vy); }
     if (b.x - b.r <= 0) { b.x = b.r; b.vx = Math.abs(b.vx); }
@@ -938,6 +980,7 @@ function update(dt) {
     if (!p.alive || p.inv > 0 || (p.power && p.power.type === 'burbuja')) return;
     const rx = p.x - p.w / 2 + 4, ry = FLOOR - p.h + 6, rw = p.w - 8, rh = p.h - 6;
     for (const b of balls) {
+      if (b.jaula) continue;
       const cx = Math.max(rx, Math.min(rx + rw, b.x)), cy = Math.max(ry, Math.min(ry + rh, b.y));
       const dx = b.x - cx, dy = b.y - cy;
       if (dx * dx + dy * dy < b.r * b.r) { hurt(p); break; }
@@ -949,6 +992,29 @@ function update(dt) {
     players.forEach(p => { p.shots = []; p.power = null; }); item = null; banner = null;
     celebrate();
   }
+}
+function romperVitrina(jl) {
+  jaulas = jaulas.filter(v => v !== jl);
+  balls.forEach(b => { if (b.jaula === jl) { b.jaula = null; b.vx = Math.sign(b.vx || 1) * VX; } });
+  score += 50; sfx.cristal();
+  for (let i = 0; i < 26; i++) {
+    const a = Math.random() * Math.PI * 2, sp = 60 + Math.random() * 200;
+    particles.push({ x: jl.x + (Math.random() - .5) * jl.w, y: Math.random() * jl.bottom, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+                     life: .5 + Math.random() * .4, color: Math.random() < .5 ? '#d6f0ff' : '#7fc4f0', r: 2 + Math.random() * 3 });
+  }
+}
+function drawVitrinas() {
+  jaulas.forEach(v => {
+    const x0 = v.x - v.w / 2;
+    ctx.save();
+    ctx.fillStyle = 'rgba(160,215,255,.30)'; ctx.fillRect(x0, 0, v.w, v.bottom);
+    ctx.beginPath(); ctx.rect(x0, 0, v.w, v.bottom); ctx.clip();
+    ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 5;            // brillos del cristal
+    for (let y = -v.w; y < v.bottom + v.w; y += 28) { ctx.beginPath(); ctx.moveTo(x0, y + v.w * .7); ctx.lineTo(x0 + v.w, y); ctx.stroke(); }
+    ctx.restore();
+    ctx.strokeStyle = '#1f5f9e'; ctx.lineWidth = 4; ctx.strokeRect(x0, -4, v.w, v.bottom + 4);   // marco
+    ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.lineWidth = 1.5; ctx.strokeRect(x0 + 4, 0, v.w - 8, v.bottom - 4);
+  });
 }
 function popBall(j) {
   const b = balls[j];
@@ -1228,6 +1294,7 @@ function render() {
   if (state === 'menu') return;
   players.forEach(drawHarpoon);
   balls.forEach(drawBall);
+  drawVitrinas();
   drawItem();
   players.forEach(drawPlayer);
   players.forEach(drawPower);
@@ -1328,7 +1395,7 @@ function showMenu() {
     '<p class="label">3. Opcional</p>' +
     '<div class="row"><button id="bc" class="alt">📷 Poner nuestras caras</button>' +
     '<button id="bmus" class="alt">' + (musicaOn ? '🎵 Música: sí' : '🔇 Música: no') + '</button></div>' +
-    '<p class="help">Revienta todas las bolas sin que te toquen. Desde el nivel 2 aparece un 🎁 arma secreta: ¡pasa por encima para cogerla!</p>' +
+    '<p class="help">Revienta todas las bolas sin que te toquen. Desde el nivel 2 aparece un 🎁 arma secreta: ¡pasa por encima para cogerla! Las bolas encerradas en 🧊 cristal solo salen si rompes el cristal con el arpón.</p>' +
     '<p class="help keys"><b>' + PERSONAJES[0].nombre + ':</b> A / D para moverse · W o espacio para disparar<br>' +
     '<b>' + PERSONAJES[1].nombre + ':</b> ← / → para moverse · ↑ para disparar</p>' +
     '<p class="help touchhelp">1 jugador: toca la mitad izquierda o derecha de la pantalla para moverte.<br>' +
