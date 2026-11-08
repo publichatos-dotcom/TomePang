@@ -88,7 +88,7 @@
    carga desde su móvil (botón "Poner nuestras caras") y se
    guardan solo en ese móvil. Nunca se suben a internet.
    ========================================================= */
-const VERSION = '2.4';      // cámbiala en cada actualización para ver que ha llegado
+const VERSION = '2.5';      // cámbiala en cada actualización para ver que ha llegado
 const PERSONAJES = [
   { nombre: 'Papá', color: '#7d1f2c', pelo: '#3a2a1e', ancho: 34, alto: 70, imagen: null, cuello: '#a5ff3a', cara: null },
   { nombre: 'Hijo', color: '#c9dc7c', cuello: '#1f2a44', pelo: '#5a3a1e', ancho: 30, alto: 58, imagen: null, cara: null }
@@ -613,12 +613,14 @@ const sfx = {
   shot: () => tone(300, 1200, .12, 'square', .05),
   pop: () => { noise(.12, .18); tone(500, 150, .12, 'triangle', .1); },
   hurt: () => tone(400, 60, .5, 'sawtooth', .1),
+  // "uah, uah, uah, uaaah" de dibujos animados al caer
+  muerte: () => [392, 370, 349, 311].forEach((f, i) => setTimeout(() => tone(f, f * (i === 3 ? .8 : .96), i === 3 ? .7 : .22, 'sawtooth', .08), i * 240)),
   laser: () => tone(1400, 700, .06, 'sawtooth', .025),
   appear: () => [880, 1175, 1568].forEach((f, i) => setTimeout(() => tone(f, f, .1, 'triangle', .06), i * 70)),
   power: () => [523, 784, 1046, 1568].forEach((f, i) => setTimeout(() => tone(f, f * 1.01, .12, 'square', .06), i * 60)),
   clear: () => [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => tone(f, f, .18, 'square', .06), i * 110))
 };
-function say(text) {
+function say(text, pitch = 1.6) {
   try {
     if (!('speechSynthesis' in window)) return;
     const u = new SpeechSynthesisUtterance(text);
@@ -626,7 +628,7 @@ function say(text) {
     const v = speechSynthesis.getVoices().find(v => v.lang && v.lang.toLowerCase().startsWith('es-es'))
            || speechSynthesis.getVoices().find(v => v.lang && v.lang.toLowerCase().startsWith('es'));
     if (v) u.voice = v;
-    u.rate = 1.15; u.pitch = 1.6; u.volume = 1;
+    u.rate = 1.15; u.pitch = pitch; u.volume = 1;
     speechSynthesis.cancel(); speechSynthesis.speak(u);
   } catch (e) {}
 }
@@ -770,7 +772,9 @@ cv.addEventListener('pointermove', e => { if (pointers.has(e.pointerId)) { point
 cv.addEventListener('contextmenu', e => e.preventDefault());
 
 /* ---------- Estado del juego ---------- */
-let state = 'menu', level = 0, score = 0, timer = 0;
+let state = 'menu', level = 0, score = 0, timer = 0, animT = 0;
+// en el modo súper fácil se empieza con 5 vidas; en los demás, con 3
+function vidasIniciales() { return modo === 'superfacil' ? 5 : 3; }
 let players = [], balls = [], particles = [];
 
 function makePlayer(i) {
@@ -778,7 +782,7 @@ function makePlayer(i) {
   return {
     i, c, w: c.ancho, h: c.alto,
     x: numPlayers === 1 ? W / 2 : (i === 0 ? W * 0.4 : W * 0.6),
-    facing: i === 0 ? 1 : -1, lives: 3, inv: 0, alive: true, walk: 0, cd: 0,
+    facing: i === 0 ? 1 : -1, lives: vidasIniciales(), inv: 0, alive: true, walk: 0, cd: 0,
     shots: [], power: null
   };
 }
@@ -787,7 +791,8 @@ function loadLevel(n) {
   ponerFondo(n);
   LEVELS[n].forEach(b => balls.push(makeBall(b.s, b.x * W / 800, 120, b.d * VX, 0)));
   players.forEach(p => {
-    p.shots = []; p.power = null; p.inv = 1.5;
+    p.shots = []; p.power = null; p.inv = 1.5; p.bocadillo = null;
+    if (!p.alive) p.deadT = null;   // en el nivel nuevo ya no se ve al que se cayó
     p.x = numPlayers === 1 ? W / 2 : (p.i === 0 ? W * 0.4 : W * 0.6);
   });
   state = 'ready'; timer = 1.6; touchFlash = 3;
@@ -817,6 +822,11 @@ function startGame(n) {
 function update(dt) {
   particles.forEach(p => { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 600 * dt; p.life -= dt; });
   particles = particles.filter(p => p.life > 0);
+  animT += dt;
+  players.forEach(p => {
+    if (p.deadT != null) p.deadT += dt;
+    if (p.bocadillo && (p.bocadillo.t -= dt) <= 0) p.bocadillo = null;
+  });
 
   if (touchFlash > 0) touchFlash -= dt;
   if (state === 'ready') { timer -= dt; if (timer <= 0) { state = 'playing'; players.forEach(p => p.inv = 1); } }
@@ -955,10 +965,22 @@ function popBall(j) {
 }
 function hurt(p) {
   p.lives--; p.inv = 2; p.shots = [];
-  sfx.hurt();
   if (navigator.vibrate) try { navigator.vibrate(150); } catch (e) {}
-  if (p.lives <= 0) p.alive = false;
-  if (players.every(q => !q.alive)) { state = 'over'; setTimeout(showGameOver, 700); }
+  if (p.lives <= 0) {
+    // se cae redondo, con los ojos tachados
+    p.alive = false; p.deadT = 0;
+    sfx.muerte(); quejarse(p, '¡Noooo!');
+  } else {
+    sfx.hurt(); quejarse(p);
+  }
+  if (players.every(q => !q.alive)) { state = 'over'; setTimeout(showGameOver, 1900); }
+}
+// cuando una bola les da, se quejan (con voz y con un bocadillo)
+const QUEJAS = ['¡Ay!', '¡Ay, ay, ay!', '¡Uy, qué daño!', '¡Jo!', '¡Auch!', '¡Mi cabeza!'];
+function quejarse(p, txt) {
+  txt = txt || QUEJAS[Math.floor(Math.random() * QUEJAS.length)];
+  p.bocadillo = { text: txt, t: 1.4 };
+  say(txt, p.i === 0 ? .8 : 1.7);   // Papá con voz grave, Hijo con voz aguda
 }
 
 /* ---------- Dibujo ---------- */
@@ -966,13 +988,55 @@ function roundRect(x, y, w, h, r) {
   ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
   ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
 }
+// ojo tachado: una X negra con borde blanco para que se vea sobre la foto
+function ojoX(cx, cy, s) {
+  ctx.save(); ctx.lineCap = 'round';
+  [['#fff', s * .55 + 2], ['#111', s * .55]].forEach(([col, lw]) => {
+    ctx.strokeStyle = col; ctx.lineWidth = lw; ctx.beginPath();
+    ctx.moveTo(cx - s, cy - s); ctx.lineTo(cx + s, cy + s); ctx.moveTo(cx + s, cy - s); ctx.lineTo(cx - s, cy + s); ctx.stroke();
+  });
+  ctx.restore();
+}
 function drawPlayer(p) {
-  if (!p.alive) return;
-  if (p.inv > 0 && Math.floor(p.inv * 10) % 2 === 0) return; // parpadeo tras recibir golpe
-  const c = p.c, x = p.x, base = FLOOR, h = p.h, w = p.w;
+  if (!p.alive && p.deadT == null) return;
+  if (p.alive && p.inv > 0 && Math.floor(p.inv * 10) % 2 === 0) return; // parpadeo tras recibir golpe
+  const x = p.x, base = FLOOR, w = p.w;
   ctx.save();
   // sombra
   ctx.fillStyle = 'rgba(0,0,0,.25)'; ctx.beginPath(); ctx.ellipse(x, base + 2, w * .6, 4, 0, 0, 7); ctx.fill();
+  const walk = p.walk, facing = p.facing;
+  if (!p.alive) {
+    // caída: gira sobre los pies hasta quedar tumbado, hacia el centro de la pantalla
+    const k = Math.min(1, p.deadT * 2.5), dir = p.x < W / 2 ? 1 : -1;
+    const rebote = k === 1 ? Math.max(0, Math.sin(Math.min(1, (p.deadT - .4) * 4) * Math.PI)) * 6 : 0;
+    ctx.translate(x, base - k * w * .45 - rebote); ctx.rotate(dir * k * k * Math.PI / 2); ctx.translate(-x, -base);
+    p.walk = 0;
+  } else if (state === 'clear') {
+    // baile de victoria: saltitos, balanceo y media vuelta
+    const t = animT * 9 + p.i * 1.6;
+    const salto = Math.abs(Math.sin(t)) * 12;
+    ctx.translate(x, base - salto); ctx.rotate(Math.sin(t) * .2); ctx.translate(-x, -base);
+    p.walk = t * 1.5; p.facing = Math.sin(t * .5) > 0 ? 1 : -1;
+  }
+  drawPlayerBody(p);
+  p.walk = walk; p.facing = facing;
+  ctx.restore();
+}
+function drawBocadillo(p) {
+  if (!p.bocadillo) return;
+  const y = FLOOR - p.h - 26 - (1.4 - p.bocadillo.t) * 10, txt = p.bocadillo.text;
+  ctx.save(); ctx.globalAlpha = Math.min(1, p.bocadillo.t * 3);
+  ctx.font = 'bold 18px system-ui, sans-serif';
+  const tw = ctx.measureText(txt).width + 18, bx = Math.max(4, Math.min(W - tw - 4, p.x - tw / 2));
+  ctx.fillStyle = '#fff'; ctx.strokeStyle = '#222'; ctx.lineWidth = 2;
+  roundRect(bx, y - 16, tw, 30, 12); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(p.x - 6, y + 14); ctx.lineTo(p.x, y + 24); ctx.lineTo(p.x + 6, y + 14); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#c0392b'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(txt, bx + tw / 2, y);
+  ctx.restore();
+}
+function drawPlayerBody(p) {
+  const c = p.c, x = p.x, base = FLOOR, h = p.h, w = p.w;
+  ctx.save();
   if (c.imagen && c.imagen.complete && c.imagen.naturalWidth) {
     const iw = h * c.imagen.naturalWidth / c.imagen.naturalHeight;
     ctx.translate(x, 0); if (p.facing < 0) ctx.scale(-1, 1);
@@ -996,10 +1060,14 @@ function drawPlayer(p) {
   const hy = base - legH - bodyH - headR + 2;
   ctx.fillStyle = '#f1c7a1'; ctx.beginPath(); ctx.arc(x, hy, headR, 0, 7); ctx.fill();
   ctx.fillStyle = c.pelo; ctx.beginPath(); ctx.arc(x, hy - 2, headR, Math.PI * 1.05, Math.PI * 1.95); ctx.fill();
-  ctx.fillStyle = '#222';
-  ctx.beginPath(); ctx.arc(x - 4 + p.facing * 2, hy, 1.8, 0, 7); ctx.arc(x + 4 + p.facing * 2, hy, 1.8, 0, 7); ctx.fill();
-  ctx.strokeStyle = '#7a3b2a'; ctx.lineWidth = 1.5;
-  ctx.beginPath(); ctx.arc(x + p.facing * 2, hy + 3, 4, .15 * Math.PI, .85 * Math.PI); ctx.stroke();
+  if (!p.alive) {
+    ojoX(x - 4 + p.facing * 2, hy, 2.5); ojoX(x + 4 + p.facing * 2, hy, 2.5);
+  } else {
+    ctx.fillStyle = '#222';
+    ctx.beginPath(); ctx.arc(x - 4 + p.facing * 2, hy, 1.8, 0, 7); ctx.arc(x + 4 + p.facing * 2, hy, 1.8, 0, 7); ctx.fill();
+    ctx.strokeStyle = '#7a3b2a'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(x + p.facing * 2, hy + 3, 4, .15 * Math.PI, .85 * Math.PI); ctx.stroke();
+  }
   ctx.restore();
 }
 // personaje "cabezón" con la cara de la foto
@@ -1029,7 +1097,10 @@ function drawPlayerWithFace(p) {
   ctx.fillRect(x + w / 2 - 1, by + 3 - swing * .3 + bodyH * .8, 6, 4);
   // cabeza (foto), con un leve vaivén al andar
   const bob = p.walk ? Math.abs(Math.sin(p.walk)) * 1.5 : 0;
-  ctx.drawImage(c.caraImg, x - headW / 2, by - headH + h * .06 - bob, headW, headH);
+  const hy0 = by - headH + h * .06 - bob;
+  ctx.drawImage(c.caraImg, x - headW / 2, hy0, headW, headH);
+  // ojos tachados encima de la foto (a la altura aproximada de los ojos)
+  if (!p.alive) { const s = headW * .1; ojoX(x - headW * .2, hy0 + headH * .42, s); ojoX(x + headW * .2, hy0 + headH * .42, s); }
 }
 
 function drawHarpoon(p) {
@@ -1117,7 +1188,7 @@ function text(t, x, y, size, color = '#fff', align = 'center') {
 function drawHUD() {
   players.forEach(p => {
     const left = p.i === 0, x = left ? 12 : W - 12;
-    const hearts = '♥'.repeat(Math.max(0, p.lives)) + '♡'.repeat(Math.max(0, 3 - p.lives));
+    const hearts = '♥'.repeat(Math.max(0, p.lives)) + '♡'.repeat(Math.max(0, vidasIniciales() - p.lives));
     text(p.c.nombre + ' ' + hearts, x, 18, 18, p.alive ? '#fff' : '#999', left ? 'left' : 'right');
   });
   text('Nivel ' + (level + 1) + '   ·   ' + score + ' puntos', W / 2, 18, 16, '#ffd84a');
@@ -1131,6 +1202,7 @@ function render() {
   drawItem();
   players.forEach(drawPlayer);
   players.forEach(drawPower);
+  players.forEach(drawBocadillo);
   particles.forEach(p => { ctx.globalAlpha = Math.max(0, p.life * 1.6); ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 7); ctx.fill(); });
   ctx.globalAlpha = 1;
   if (isTouch) drawTouchHints();
@@ -1219,7 +1291,7 @@ function showMenu() {
   showOverlay(
     '<h1>PANG</h1><h2>de Tomelloso · con ' + PERSONAJES[0].nombre + ' y ' + PERSONAJES[1].nombre + '</h2>' +
     '<p class="label">1. Elige el modo</p>' +
-    '<div class="row mode"><button data-modo="superfacil">Súper fácil<small>un arpón cada segundo</small></button>' +
+    '<div class="row mode"><button data-modo="superfacil">Súper fácil<small>un arpón cada segundo · 5 vidas</small></button>' +
     '<button data-modo="facil">Modo fácil<small>el arpón dispara solo</small></button>' +
     '<button data-modo="clasico">Modo clásico<small>pulsas para disparar</small></button></div>' +
     '<p class="label">2. ¿Cuántos jugáis?</p>' +
@@ -1345,7 +1417,7 @@ function recortarCara(i, img) {
 function showGameOver() {
   showOverlay('<h1>¡Ooooh!</h1><h2>Las bolas os han pillado en el nivel ' + (level + 1) + ' · ' + score + ' puntos</h2>' +
     '<div class="row"><button id="br">Reintentar nivel</button><button id="bm" class="alt">Menú</button></div>');
-  document.getElementById('br').onclick = () => { players.forEach(p => { p.lives = 3; p.alive = true; }); hideOverlay(); loadLevel(level); };
+  document.getElementById('br').onclick = () => { players.forEach(p => { p.lives = vidasIniciales(); p.alive = true; p.deadT = null; }); hideOverlay(); loadLevel(level); };
   document.getElementById('bm').onclick = showMenu;
 }
 function showWin() {
