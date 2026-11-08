@@ -88,7 +88,7 @@
    carga desde su móvil (botón "Poner nuestras caras") y se
    guardan solo en ese móvil. Nunca se suben a internet.
    ========================================================= */
-const VERSION = '2.3';      // cámbiala en cada actualización para ver que ha llegado
+const VERSION = '2.4';      // cámbiala en cada actualización para ver que ha llegado
 const PERSONAJES = [
   { nombre: 'Papá', color: '#7d1f2c', pelo: '#3a2a1e', ancho: 34, alto: 70, imagen: null, cuello: '#a5ff3a', cara: null },
   { nombre: 'Hijo', color: '#c9dc7c', cuello: '#1f2a44', pelo: '#5a3a1e', ancho: 30, alto: 58, imagen: null, cara: null }
@@ -648,6 +648,65 @@ function celebrate() {
   setTimeout(() => say(FRASE_GANAR), 150);
 }
 
+/* ---------- Música de fondo (compuesta aquí mismo, sin archivos de sonido) ----------
+   Suena solo mientras se juega. Cada nivel va un poco más rápido.
+   Se puede quitar desde el menú con el botón "🎵 Música". */
+let musicaOn = true;
+try { musicaOn = localStorage.getItem('pangMusica') !== 'no'; } catch (e) {}
+// 8 compases de 8 corcheas. Números = notas (72 es el Do agudo), 0 = silencio
+const MELODIA = [
+  72, 0, 76, 79, 76, 0, 72, 74,   76, 0, 72, 69, 72, 0, 76, 0,
+  77, 0, 76, 74, 72, 0, 69, 72,   74, 0, 71, 67, 71, 74, 79, 0,
+  79, 0, 76, 72, 79, 0, 84, 0,    81, 0, 79, 76, 72, 0, 76, 79,
+  77, 76, 74, 72, 69, 0, 72, 74,  74, 0, 79, 0, 77, 76, 74, 71
+];
+const ACORDES = [48, 45, 41, 43, 48, 45, 41, 43]; // Do, La menor, Fa, Sol (el bajo)
+let mus = null, ruidoHat = null;
+const frec = m => 440 * Math.pow(2, (m - 69) / 12);
+function voz(f, t, d, type, vol, dest) {
+  const o = actx.createOscillator(), gn = actx.createGain();
+  o.type = type; o.frequency.value = f;
+  gn.gain.setValueAtTime(vol, t); gn.gain.exponentialRampToValueAtTime(.0001, t + d);
+  o.connect(gn).connect(dest); o.start(t); o.stop(t + d + .02);
+}
+function platillo(t, dest) {
+  if (!ruidoHat) {
+    const n = Math.floor(actx.sampleRate * .04); ruidoHat = actx.createBuffer(1, n, actx.sampleRate);
+    const d = ruidoHat.getChannelData(0); for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
+  }
+  const s = actx.createBufferSource(), f = actx.createBiquadFilter(), gn = actx.createGain();
+  s.buffer = ruidoHat; f.type = 'highpass'; f.frequency.value = 7000; gn.gain.value = .035;
+  s.connect(f).connect(gn).connect(dest); s.start(t);
+}
+function notaMusica(i, t, d) {
+  const m = MELODIA[i], bajo = ACORDES[Math.floor(i / 8)] + (i % 2 ? 12 : 0);
+  if (m) voz(frec(m), t, d * .85, 'square', .022, mus.g);
+  voz(frec(bajo), t, d * .9, 'triangle', .07, mus.g);
+  if (i % 2) platillo(t, mus.g);
+}
+function pararMusica() {
+  if (!mus) return;
+  const g = mus.g; mus = null;
+  try { g.gain.setTargetAtTime(0, actx.currentTime, .04); setTimeout(() => g.disconnect(), 400); } catch (e) {}
+}
+function musicaTick() {
+  const quiere = musicaOn && actx && actx.state === 'running' && !document.hidden &&
+                 (state === 'ready' || state === 'playing' || state === 'clear');
+  if (!quiere) { pararMusica(); return; }
+  if (!mus) {
+    const g = actx.createGain(); g.connect(actx.destination);
+    mus = { g, next: actx.currentTime + .08, step: 0 };
+  }
+  // al pasar de nivel la música baja para que se oiga el "¡Toma!"
+  mus.g.gain.setTargetAtTime(state === 'clear' ? .2 : 1, actx.currentTime, .1);
+  const corchea = 60 / (126 + level * 6) / 2;
+  while (mus.next < actx.currentTime + .25) {
+    notaMusica(mus.step, mus.next, corchea);
+    mus.next += corchea; mus.step = (mus.step + 1) % MELODIA.length;
+  }
+}
+setInterval(musicaTick, 50);
+
 /* ---------- Controles ---------- */
 const input = [{ left: false, right: false, fire: false }, { left: false, right: false, fire: false }];
 let numPlayers = 1;
@@ -1166,7 +1225,8 @@ function showMenu() {
     '<p class="label">2. ¿Cuántos jugáis?</p>' +
     '<div class="row"><button id="b1" class="alt">1 jugador</button><button id="b2">2 jugadores</button></div>' +
     '<p class="label">3. Opcional</p>' +
-    '<div class="row"><button id="bc" class="alt">📷 Poner nuestras caras</button></div>' +
+    '<div class="row"><button id="bc" class="alt">📷 Poner nuestras caras</button>' +
+    '<button id="bmus" class="alt">' + (musicaOn ? '🎵 Música: sí' : '🔇 Música: no') + '</button></div>' +
     '<p class="help">Revienta todas las bolas sin que te toquen. Desde el nivel 2 aparece un 🎁 arma secreta: ¡pasa por encima para cogerla!</p>' +
     '<p class="help keys"><b>' + PERSONAJES[0].nombre + ':</b> A / D para moverse · W o espacio para disparar<br>' +
     '<b>' + PERSONAJES[1].nombre + ':</b> ← / → para moverse · ↑ para disparar</p>' +
@@ -1184,6 +1244,11 @@ function showMenu() {
   document.getElementById('b1').onclick = () => startGame(1);
   document.getElementById('b2').onclick = () => startGame(2);
   document.getElementById('bc').onclick = showFaces;
+  document.getElementById('bmus').onclick = e => {
+    musicaOn = !musicaOn;
+    try { localStorage.setItem('pangMusica', musicaOn ? 'si' : 'no'); } catch (_) {}
+    e.currentTarget.textContent = musicaOn ? '🎵 Música: sí' : '🔇 Música: no';
+  };
 }
 
 /* ---------- Caras desde el móvil (nunca se suben a internet) ---------- */
