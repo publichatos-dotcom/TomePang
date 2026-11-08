@@ -88,7 +88,7 @@
    carga desde su móvil (botón "Poner nuestras caras") y se
    guardan solo en ese móvil. Nunca se suben a internet.
    ========================================================= */
-const VERSION = '2.5';      // cámbiala en cada actualización para ver que ha llegado
+const VERSION = '2.6';      // cámbiala en cada actualización para ver que ha llegado
 const PERSONAJES = [
   { nombre: 'Papá', color: '#7d1f2c', pelo: '#3a2a1e', ancho: 34, alto: 70, imagen: null, cuello: '#a5ff3a', cara: null },
   { nombre: 'Hijo', color: '#c9dc7c', cuello: '#1f2a44', pelo: '#5a3a1e', ancho: 30, alto: 58, imagen: null, cara: null }
@@ -107,7 +107,7 @@ let W = 800; const H = 450, FLOOR = 410;
 const G = 800;              // gravedad de las bolas
 const VX = 105;             // velocidad horizontal de las bolas
 const PLAYER_SPEED = 210;
-const HARPOON_SPEED = 620;
+const HARPOON_SPEED = 760;
 const HARPOON_STICK = 2.5;  // segundos que el arpón se queda clavado en el techo
 const POWERS = {
   doble:   { nombre: 'ARPÓN DOBLE',        color: '#ffd84a', icono: '⇈' },
@@ -825,6 +825,7 @@ function update(dt) {
   animT += dt;
   players.forEach(p => {
     if (p.deadT != null) p.deadT += dt;
+    if (p.shootT > 0) p.shootT -= dt;
     if (p.bocadillo && (p.bocadillo.t -= dt) <= 0) p.bocadillo = null;
   });
 
@@ -855,23 +856,25 @@ function update(dt) {
     if (state === 'playing') {
       if (pw === 'laser') {
         // ráfaga automática de láser
-        if (p.cd <= 0) { p.shots.push({ kind: 'l', x: p.x, tip: FLOOR - p.h * .7 }); p.cd = .13; sfx.laser(); }
+        if (p.cd <= 0) { p.shots.push({ kind: 'l', x: p.x, tip: FLOOR - p.h * .7 }); p.cd = .13; p.shootT = .25; sfx.laser(); }
       } else if (modo === 'superfacil') {
         // modo súper fácil: un arpón cada segundo, pase lo que pase
         p.sf = (p.sf || 0) - dt;
         if (p.sf <= 0) {
           const offs = pw === 'triple' ? [-26, 0, 26] : pw === 'doble' ? [-12, 12] : [0];
           offs.forEach(o => p.shots.push({ kind: 'h', x: Math.max(4, Math.min(W - 4, p.x + o)), tip: FLOOR - p.h * .6, stuck: 0 }));
-          p.sf = SUPER_RITMO; sfx.shot();
+          p.sf = SUPER_RITMO; p.shootT = .3; sfx.shot();
         }
       } else {
+        // al pulsar, el arpón que está clavado en el techo desaparece y sale uno nuevo (como en el original)
+        if (tapped) p.shots = p.shots.filter(sh => !(sh.kind === 'h' && sh.stuck > 0));
         const harpoons = p.shots.filter(sh => sh.kind === 'h').length;
         const max = pw === 'doble' ? 2 : pw === 'triple' ? 3 : 1;
         const canFire = p.cd <= 0 && (pw === 'triple' ? harpoons === 0 : harpoons < max);
         if (canFire && (tapped || autoFire)) {
           const offs = pw === 'triple' ? [-26, 0, 26] : [0];
           offs.forEach(o => p.shots.push({ kind: 'h', x: Math.max(4, Math.min(W - 4, p.x + o)), tip: FLOOR - p.h * .6, stuck: 0 }));
-          p.cd = pw === 'doble' ? .2 : 0; sfx.shot();
+          p.cd = pw === 'doble' ? .2 : 0; p.shootT = .3; sfx.shot();
         }
       }
     }
@@ -882,7 +885,7 @@ function update(dt) {
   players.forEach(p => {
     p.shots.forEach(sh => {
       if (sh.kind === 'l') { sh.tip -= 900 * dt; if (sh.tip + 26 <= 0) sh.dead = true; }
-      else if (sh.stuck > 0) { sh.stuck -= dt; if (sh.stuck <= 0) { sh.dead = true; p.cd = Math.max(p.cd, .25); } }
+      else if (sh.stuck > 0) { sh.stuck -= dt; if (sh.stuck <= 0) { sh.dead = true; p.cd = Math.max(p.cd, .06); } }
       else { sh.tip -= HARPOON_SPEED * dt; if (sh.tip <= 0) { sh.tip = 0; sh.stuck = HARPOON_STICK; } }
       if (sh.dead) return;
       const bottom = sh.kind === 'l' ? sh.tip + 26 : FLOOR;
@@ -891,7 +894,7 @@ function update(dt) {
         const py = Math.max(sh.tip, Math.min(bottom, b.y));
         const dx = b.x - sh.x, dy = b.y - py;
         if (dx * dx + dy * dy <= b.r * b.r) {
-          sh.dead = true; if (sh.kind === 'h') p.cd = Math.max(p.cd, .25);
+          sh.dead = true; if (sh.kind === 'h') p.cd = Math.max(p.cd, .06);
           popBall(j); break;
         }
       }
@@ -1034,6 +1037,8 @@ function drawBocadillo(p) {
   ctx.fillStyle = '#c0392b'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(txt, bx + tw / 2, y);
   ctx.restore();
 }
+// al disparar se pone de espaldas, con los brazos hacia arriba (como en el original)
+const deEspaldas = p => p.alive && p.shootT > 0 && state !== 'clear';
 function drawPlayerBody(p) {
   const c = p.c, x = p.x, base = FLOOR, h = p.h, w = p.w;
   ctx.save();
@@ -1053,11 +1058,20 @@ function drawPlayerBody(p) {
   // cuerpo
   ctx.fillStyle = c.color; roundRect(x - w / 2, base - legH - bodyH, w, bodyH, 6); ctx.fill();
   // brazos
+  const hy = base - legH - bodyH - headR + 2;
+  if (deEspaldas(p)) {
+    // de espaldas: nuca con pelo y brazos hacia arriba
+    ctx.fillStyle = '#f1c7a1';
+    ctx.fillRect(x - w / 2 + 1, hy - headR - 6, 5, bodyH * .9);
+    ctx.fillRect(x + w / 2 - 6, hy - headR - 6, 5, bodyH * .9);
+    ctx.fillRect(x - 3, hy + headR - 4, 6, 6);                                  // cuello
+    ctx.fillStyle = c.pelo; ctx.beginPath(); ctx.arc(x, hy, headR, 0, 7); ctx.fill();
+    ctx.restore(); return;
+  }
   ctx.fillStyle = '#f1c7a1';
   ctx.fillRect(x - w / 2 - 4, base - legH - bodyH + 4 + swing * .3, 5, bodyH * .7);
   ctx.fillRect(x + w / 2 - 1, base - legH - bodyH + 4 - swing * .3, 5, bodyH * .7);
   // cabeza
-  const hy = base - legH - bodyH - headR + 2;
   ctx.fillStyle = '#f1c7a1'; ctx.beginPath(); ctx.arc(x, hy, headR, 0, 7); ctx.fill();
   ctx.fillStyle = c.pelo; ctx.beginPath(); ctx.arc(x, hy - 2, headR, Math.PI * 1.05, Math.PI * 1.95); ctx.fill();
   if (!p.alive) {
@@ -1088,6 +1102,23 @@ function drawPlayerWithFace(p) {
   ctx.fillStyle = c.color; roundRect(x - w / 2, by, w, bodyH, 7); ctx.fill();
   ctx.fillStyle = c.cuello || '#fff'; ctx.beginPath(); ctx.moveTo(x - 4, by); ctx.lineTo(x + 4, by); ctx.lineTo(x, by + 7); ctx.closePath(); ctx.fill();
   ctx.strokeStyle = 'rgba(0,0,0,.35)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x, by + 6); ctx.lineTo(x, by + bodyH * .6); ctx.stroke();
+  const bob = p.walk ? Math.abs(Math.sin(p.walk)) * 1.5 : 0;
+  const hy0 = by - headH + h * .06 - bob;
+  if (deEspaldas(p)) {
+    // de espaldas: la nuca (pelo y orejas) en lugar de la foto, y los brazos hacia arriba
+    const cx = x, cy = hy0 + headH * .5, rx = headW * .44, ry = headH * .46;
+    ctx.fillStyle = '#e8b896';
+    ctx.beginPath(); ctx.ellipse(cx - rx, cy + 2, 4, 7, 0, 0, 7); ctx.ellipse(cx + rx, cy + 2, 4, 7, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = c.pelo; ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,.12)'; ctx.beginPath(); ctx.ellipse(cx - rx * .3, cy - ry * .45, rx * .35, ry * .2, -.4, 0, 7); ctx.fill();
+    ctx.fillStyle = c.color;
+    ctx.fillRect(x - w / 2 - 3, by - bodyH * .75, 6, bodyH * .95);
+    ctx.fillRect(x + w / 2 - 3, by - bodyH * .75, 6, bodyH * .95);
+    ctx.fillStyle = '#e8b896';
+    ctx.fillRect(x - w / 2 - 3, by - bodyH * .75 - 4, 6, 5);
+    ctx.fillRect(x + w / 2 - 3, by - bodyH * .75 - 4, 6, 5);
+    return;
+  }
   // brazos (mangas)
   ctx.fillStyle = c.color;
   ctx.fillRect(x - w / 2 - 5, by + 3 + swing * .3, 6, bodyH * .8);
@@ -1096,8 +1127,6 @@ function drawPlayerWithFace(p) {
   ctx.fillRect(x - w / 2 - 5, by + 3 + swing * .3 + bodyH * .8, 6, 4);
   ctx.fillRect(x + w / 2 - 1, by + 3 - swing * .3 + bodyH * .8, 6, 4);
   // cabeza (foto), con un leve vaivén al andar
-  const bob = p.walk ? Math.abs(Math.sin(p.walk)) * 1.5 : 0;
-  const hy0 = by - headH + h * .06 - bob;
   ctx.drawImage(c.caraImg, x - headW / 2, hy0, headW, headH);
   // ojos tachados encima de la foto (a la altura aproximada de los ojos)
   if (!p.alive) { const s = headW * .1; ojoX(x - headW * .2, hy0 + headH * .42, s); ojoX(x + headW * .2, hy0 + headH * .42, s); }
